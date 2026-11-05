@@ -34,7 +34,7 @@ JP1 ジョブネットの実行履歴（ジョブごとの開始日時・終了�
 
 ## Java 移行の容量見積り（1 ジョブ＝1 JVM）
 
-上段の「本数」を、ジョブごとの JVM のメモリ（-Xmx＋非ヒープ）と CPU で重み付けして描き直し、そのピークでサーバのスペックを見積もります。
+上段の「本数」を、ジョブごとの JVM のメモリ（-Xmx＋非ヒープ）と CPU で重み付けして描き直し、そのピークでサーバのスペックを見積もります。考え方・手順（Step 0〜8）・試算例・制約時の代替案・運用格子・実機検証は **[docs/java-capacity-sizing.md](docs/java-capacity-sizing.md)** にまとめています。
 
 ![容量見積り：サンプル 100 ジョブ・資源表あり](docs/screenshot-capacity.png)
 
@@ -179,6 +179,7 @@ tools/make_sample.py        サンプル生成（100 ジョブを多重度上限
 tools/embed_samples.py      samples/ を HTML に埋め込む（--check で一致検査）
 samples/                    1 晩・100 ジョブ／5 晩・500 ジョブ／資源表の例（profile_sample.csv）
 tests/                      単体テスト・JS⇔Python 突合・推定の当たり具合
+docs/java-capacity-sizing.md  Java 移行の容量見積り手順（当てはめ方・手順・試算例・代替案・検証）
 docs/operations.md          運用の役割×時間軸（初回〜撤退）
 docs/requirements-checklist.md  会話で確定した要件と突合結果
 ```
