@@ -59,9 +59,18 @@ tbody tr.click{cursor:pointer}
 tbody tr.click:hover{background:var(--accent-bg)}
 .tablewrap{overflow-x:auto}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(520px,1fr));gap:14px}
+.cols>*{min-width:0}
 .mapgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px 16px;margin:10px 0}
 .mapgrid label{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;color:var(--text-2)}
 .mapgrid select{width:140px}
+textarea{font:12px/1.5 var(--mono);color:var(--text);background:var(--raised);border:1px solid var(--border-strong);border-radius:var(--radius);padding:8px;width:100%;resize:vertical}
+.capin{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px 20px;margin:10px 0}
+.capin label>span{white-space:nowrap}
+.capin label{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;color:var(--text-2)}
+.capin input{width:84px}
+.capin .u{display:inline-block;min-width:34px;color:var(--muted);font-size:12px}
+.kpi.main{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.note{font-size:12px;color:var(--muted);margin:6px 0 0}
 .preview td,.preview th{font-family:var(--mono);font-size:12px;white-space:nowrap;padding:3px 8px}
 .preview .hl{background:var(--accent-bg)}
 details>summary{cursor:pointer;font-weight:600;font-size:14px}
@@ -137,6 +146,34 @@ details>summary .hint{font-weight:400;margin-left:6px}
 <div class="pinned" id="pinned"></div>
 </section>
 
+<section class="card needs-data" aria-label="Java 移行の容量見積り" id="capCard">
+<div class="row" style="justify-content:space-between"><h2 style="margin:0">Java 移行の容量見積り（1 ジョブ＝1 JVM）</h2><span class="hint">既定値は仮置き。PoC の実測値で置き換える</span></div>
+<div class="capin">
+<label>ヒープ上限 -Xmx<span><input type="number" id="cHeap" min="16" step="16" value="512"><span class="u">MB</span></span></label>
+<label>非ヒープ<span><input type="number" id="cNon" min="0" step="16" value="256"><span class="u">MB</span></span></label>
+<label>定常 CPU<span><input type="number" id="cCpu" min="0" step="0.1" value="0.5"><span class="u">コア</span></span></label>
+<label>起動時 CPU<span><input type="number" id="cBoot" min="0" step="0.1" value="1.5"><span class="u">コア</span></span></label>
+<label>起動時間<span><input type="number" id="cBootSec" min="0" step="1" value="15"><span class="u">秒</span></span></label>
+<label>Elapsed 倍率（Java/COBOL）<span><input type="number" id="cFactor" min="0.1" step="0.1" value="1.0"><span class="u">倍</span></span></label>
+<label>OS・常駐プロセス<span><input type="number" id="cOs" min="0" step="1" value="8"><span class="u">GB</span></span></label>
+<label>メモリの余裕<span><input type="number" id="cMargin" min="0" step="5" value="30"><span class="u">%</span></span></label>
+<label>CPU 目標使用率<span><input type="number" id="cUtil" min="10" max="100" step="5" value="70"><span class="u">%</span></span></label>
+<label>CPU を平均する幅<span><input type="number" id="cWin" min="0" step="60" value="300"><span class="u">秒</span></span></label>
+</div>
+<details id="profBox"><summary>ジョブ別・クラス別の値<span class="hint" id="profSummary"></span></summary>
+<p class="note">1 行 1 ルール（パターン,クラス,ヒープMB,非ヒープMB,定常CPU,起動CPU,起動秒）。上から順に最初に一致した行を使い、空欄は上の既定値。パターンは * と ? が使え、/ を含むと「ジョブネット/ジョブ名」と照合します。</p>
+<textarea id="prof" rows="9" spellcheck="false" placeholder="パターン,クラス,ヒープMB,非ヒープMB,定常CPU,起動CPU,起動秒&#10;大型マスタ更新,L,4096,384,1.0,2.0,20&#10;受信取込*,M,1024,,0.6,,"></textarea>
+<div class="row" style="margin-top:6px"><button type="button" id="profSample">サンプル用の例を入れる</button><button type="button" id="profLoad">ファイルから読む</button><input type="file" id="profFile" accept=".csv,.tsv,.txt" hidden><span id="profMsg" class="hint"></span></div>
+</details>
+<div class="kpis" id="capKpis"></div>
+<p class="note" id="capNote"></p>
+<div class="chartwrap" id="cwrap" style="margin-top:8px"><canvas id="cc" role="img" aria-label="JVM メモリ合計と CPU 使用コアの時系列"></canvas><div class="tip" id="ctip"></div></div>
+<div class="cols" style="margin-top:10px">
+<div><h2>メモリのピーク時刻に動いている JVM</h2><p class="hint" id="atPeakCap" style="margin:-4px 0 8px"></p><div class="tablewrap"><table id="atPeakTbl"></table></div></div>
+<div><h2>クラス別の内訳</h2><p class="hint" style="margin:-4px 0 8px">選択中の業務日に動くジョブ。ピーク時は、メモリのピーク時刻の値。</p><div class="tablewrap"><table id="clsTbl"></table></div></div>
+</div>
+</section>
+
 <section class="card needs-data" aria-label="業務日×時刻の最大多重度">
 <div class="row" style="justify-content:space-between"><h2>業務日 × 時刻の最大多重度</h2><span class="hint">セルをクリックするとその1時間を拡大</span></div>
 <div class="chartwrap" id="hwrap"><canvas id="hv" role="img" aria-label="業務日ごと・1時間ごとの最大同時実行数のヒートマップ"></canvas><div class="tip" id="htip"></div></div>
@@ -160,6 +197,7 @@ details>summary .hint{font-weight:400;margin-left:6px}
 <button type="button" id="expTimeline">タイムライン CSV</button>
 <button type="button" id="expJobs">ジョブ別 CSV</button>
 <button type="button" id="expPeaks">ピーク区間 CSV</button>
+<button type="button" id="expCap">容量タイムライン CSV</button>
 <span class="hint">表示範囲（タイムライン）／選択中の業務日（ジョブ・ピーク）を UTF-8（BOM 付き）で保存</span></div>
 </section>
 
@@ -281,6 +319,22 @@ details>summary .hint{font-weight:400;margin-left:6px}
 /日次バッチ/DWH連携,整合性チェック,2026/11/05 00:47:38,2026/11/05 01:12:38,1500,正常終了
 /日次バッチ/DWH連携,バックアップ,2026/11/05 01:12:38,2026/11/05 01:32:38,1200,正常終了
 /日次バッチ,日次終了処理,2026/11/05 01:32:38,2026/11/05 01:34:08,90,正常終了
+</script>
+<script type="text/plain" id="sample-profile" data-src="samples/profile_sample.csv">
+# ジョブ別・クラス別の資源表（サンプル用の例。値は説明用の仮置きで、実測値ではない）
+# 1 行 1 ルール。上から順に最初に一致した行を使う。空欄は画面（または CLI 引数）の既定値。
+# パターンは * と ? が使える。/ を含むパターンは「ジョブネット/ジョブ名」と照合する。
+パターン,クラス,ヒープMB,非ヒープMB,定常CPU,起動CPU,起動秒
+大型マスタ更新,L,4096,384,1.0,2.0,20
+DWH連携,L,3072,320,0.6,,
+差分抽出,L,2048,320,0.8,,
+整合性チェック,M,1024,,0.8,,
+集計*,M,1536,,0.8,,
+受信取込*,M,1024,,0.6,,
+帳票出力*,S,512,,0.4,,
+日付変更後処理*,S,512,,0.3,,
+バックアップ,S,256,,0.2,,
+日次*処理,S,256,,0.1,,
 </script>
 <script type="text/plain" id="sample-5days" data-src="samples/sample_5days.csv">
 ジョブネット名,ジョブ名,開始日時,終了日時,経過時間(秒),終了状態
@@ -1169,6 +1223,118 @@ const Core = (() => {
     });
   }
 
+  // ---------------- 容量見積り（Java 移行：1 ジョブ＝1 JVM） ----------------
+  // ジョブごとの資源量（メモリ MB・CPU コア）で多重度を重み付けし、時刻ごとの合計とそのピークを出す。
+  function globRe(p) {
+    return new RegExp('^' + String(p).trim().replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
+  }
+  function profNum(v) {
+    const t = String(v == null ? '' : v).trim();
+    if (!t) return null;
+    if (!/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(t)) return NaN;
+    return Number(t);
+  }
+  // 1 行 1 ルール：パターン,クラス,ヒープMB,非ヒープMB,定常CPU,起動CPU,起動秒（空欄＝既定値、# で始まる行は注記）
+  function parseProfile(text) {
+    const rules = [], errors = [];
+    String(text || '').split(/\r?\n/).forEach((raw, i) => {
+      const line = raw.trim();
+      if (!line || line[0] === '#') return;
+      const c = (splitRows(line, line.indexOf('\t') >= 0 ? '\t' : ',')[0] || []).map(x => x.trim());
+      if (/^(パターン|pattern)$/i.test(c[0] || '')) return;
+      if (!c[0]) { errors.push({ line: i + 1, reason: 'パターンが空' }); return; }
+      const v = [c[2], c[3], c[4], c[5], c[6]].map(profNum);
+      if (v.some(x => Number.isNaN(x) || (x != null && x < 0))) { errors.push({ line: i + 1, reason: '数値を解釈できない' }); return; }
+      rules.push({ pat: c[0], cls: c[1] || '', heap: v[0], nonheap: v[1], cpu: v[2], bootCpu: v[3], bootSec: v[4], re: globRe(c[0]), line: i + 1 });
+    });
+    return { rules, errors };
+  }
+  function resolveProfiles(jobs, rules, d) {
+    const pick = (v, dv) => (v == null ? dv : v);
+    return jobs.map(j => {
+      const full = (j.group ? j.group.replace(/\/+$/, '') + '/' : '') + j.name;
+      let ri = -1;
+      for (let k = 0; k < rules.length; k++) { const r = rules[k]; if (r.re.test(r.pat.indexOf('/') >= 0 ? full : j.name)) { ri = k; break; } }
+      const r = ri >= 0 ? rules[ri] : {};
+      const heap = pick(r.heap, d.heap), nonheap = pick(r.nonheap, d.nonheap);
+      return { rule: ri, cls: ri >= 0 ? (r.cls || r.pat) : '既定値', heap, nonheap, mem: heap + nonheap, cpu: pick(r.cpu, d.cpu), bootCpu: pick(r.bootCpu, d.bootCpu), bootSec: pick(r.bootSec, d.bootSec) };
+    });
+  }
+  // メモリ：開始〜終了の間ずっと確保。CPU：開始から起動秒の間は起動 CPU、その後は定常 CPU。Elapsed は factor 倍（開始は据え置き）
+  function capacitySeries(jobs, prof, factor) {
+    const m = new Map();
+    const add = (t, a, b, c) => { let d = m.get(t); if (!d) { d = [0, 0, 0]; m.set(t, d); } d[0] += a; d[1] += b; d[2] += c; };
+    const ends = new Array(jobs.length);
+    for (let i = 0; i < jobs.length; i++) {
+      const j = jobs[i], p = prof[i], e = j.s + (j.e - j.s) * factor;
+      ends[i] = e;
+      if (!(e > j.s)) continue;
+      add(j.s, p.mem, 1, 0); add(e, -p.mem, -1, 0);
+      const boot = Math.min(Math.max(0, p.bootSec), e - j.s);
+      if (boot > 0) { add(j.s, 0, 0, p.bootCpu); add(j.s + boot, 0, 0, -p.bootCpu); }
+      if (j.s + boot < e) { add(j.s + boot, 0, 0, p.cpu); add(e, 0, 0, -p.cpu); }
+    }
+    const ts = Array.from(m.keys()).sort((a, b) => a - b), n = ts.length;
+    const t = new Float64Array(n), mem = new Float64Array(n), run = new Int32Array(n), cpu = new Float64Array(n);
+    let a = 0, r = 0, c = 0;
+    for (let k = 0; k < n; k++) { const d = m.get(ts[k]); a += d[0]; r += d[1]; c += d[2]; t[k] = ts[k]; mem[k] = a; run[k] = r; cpu[k] = c; }
+    return { t, mem, run, cpu, ends };
+  }
+  // [a, b) の中で、幅 W 秒の移動平均が最大になる区間（階段関数なので、窓の端が切れ目に揃う位置だけ調べればよい）
+  function windowPeak(S, key, a, b, W) {
+    const segS = [], segV = [], cum = [];
+    let acc = 0;
+    forSegments(S, a, b, (s0, s1, k) => { const v = k < 0 ? 0 : S[key][k]; segS.push(s0); segV.push(v); cum.push(acc); acc += v * (s1 - s0); });
+    if (!segS.length) return { peak: 0, at: NaN };
+    if (!(W > 0)) { let peak = -Infinity, at = NaN; segV.forEach((v, k) => { if (v > peak) { peak = v; at = segS[k]; } }); return { peak, at }; }
+    if (b - a <= W) return { peak: acc / (b - a), at: a };
+    const I = x => {
+      let lo = 0, hi = segS.length - 1, ix = 0;
+      while (lo <= hi) { const mid = (lo + hi) >> 1; if (segS[mid] <= x) { ix = mid; lo = mid + 1; } else hi = mid - 1; }
+      return cum[ix] + segV[ix] * (x - segS[ix]);
+    };
+    let peak = -Infinity, at = NaN;
+    for (let k = 0; k < segS.length; k++) {
+      for (const x0 of [segS[k], segS[k] - W]) {
+        const x = Math.min(Math.max(x0, a), b - W), v = (I(x + W) - I(x)) / W;
+        if (v > peak + 1e-12) { peak = v; at = x; }
+      }
+    }
+    return { peak, at };
+  }
+
+  // A = analyze() の結果。o = { heap, nonheap, cpu, bootCpu, bootSec, factor, osGB, margin(%), util(%), limit, cpuWindow(秒) }
+  function capacity(A, rules, o) {
+    const J = A.jobs, prof = resolveProfiles(J, rules, o), C = capacitySeries(J, prof, o.factor);
+    const inSel = [];
+    J.forEach((j, i) => { if (C.ends[i] > A.sel[0] && j.s < A.sel[1]) inSel.push(i); });
+    const a = A.sel[0];
+    let b = A.sel[1];
+    inSel.forEach(i => { if (C.ends[i] > b) b = C.ends[i]; });
+    let memPeak = 0, memAt = NaN, cpuPeak = 0, cpuAt = NaN, runPeak = 0;
+    forSegments(C, a, b, (s0, s1, k) => {
+      if (k < 0) return;
+      if (C.mem[k] > memPeak) { memPeak = C.mem[k]; memAt = s0; }
+      if (C.cpu[k] > cpuPeak) { cpuPeak = C.cpu[k]; cpuAt = s0; }
+      if (C.run[k] > runPeak) runPeak = C.run[k];
+    });
+    const mems = inSel.map(i => prof[i].mem).sort((x, y) => y - x);
+    const maxMem = mems.length ? mems[0] : 0;
+    const guarantee = o.limit > 0 ? mems.slice(0, o.limit).reduce((s, v) => s + v, 0) : null;
+    const atPeak = isFinite(memAt) ? inSel.filter(i => J[i].s <= memAt && memAt < C.ends[i]).sort((x, y) => prof[y].mem - prof[x].mem || x - y) : [];
+    const k = 1 + o.margin / 100, sus = windowPeak(C, 'cpu', a, b, o.cpuWindow);
+    return {
+      prof, C, range: [a, b], inSel, memPeak, memAt, cpuPeak, cpuAt, cpuSus: sus.peak, cpuSusAt: sus.at, runPeak, maxMem, guarantee, atPeak,
+      memRecGB: o.osGB + memPeak * k / 1024,
+      coresRec: Math.ceil(sus.peak / (o.util / 100) - 1e-9),
+      umeGB: o.osGB + runPeak * maxMem * k / 1024,
+      guaranteeGB: guarantee == null ? null : o.osGB + guarantee * k / 1024
+    };
+  }
+  const SKU_GB = [16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048];
+  const SKU_CORES = [4, 8, 12, 16, 20, 24, 28, 32, 40, 48, 56, 64, 96, 128];
+  function roundUpTo(v, list) { for (const x of list) if (x >= v - 1e-9) return x; return Math.ceil(v); }
+
   function filterJobs(jobs, expr) {
     const toks = String(expr || '').split(/[,、\s]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
     const inc = toks.filter(t => t[0] !== '!'), exc = toks.filter(t => t[0] === '!').map(t => t.slice(1)).filter(Boolean);
@@ -1207,7 +1373,7 @@ const Core = (() => {
     return { jobs, days, sel, longThr, longFlag, S, lanes, suspect, startConc, stats, peakThr, peaks };
   }
 
-  return { DAY, decodeBytes, detectDelimiter, splitRows, parseDateTime, parseTimeOfDay, parseDuration, hasTimePart, looksHeader, parseLog, guessMapping, buildJobs, sweep, valueAt, valueBefore, forSegments, rangeStats, peakIntervals, longThreshold, assignLanes, waitSuspects, businessDayStart, listDays, hourlyMatrix, filterJobs, analyze };
+  return { DAY, decodeBytes, detectDelimiter, splitRows, parseDateTime, parseTimeOfDay, parseDuration, hasTimePart, looksHeader, parseLog, guessMapping, buildJobs, sweep, valueAt, valueBefore, forSegments, rangeStats, peakIntervals, longThreshold, assignLanes, waitSuspects, businessDayStart, listDays, hourlyMatrix, filterJobs, analyze, windowPeak, globRe, parseProfile, resolveProfiles, capacitySeries, capacity, SKU_GB, SKU_CORES, roundUpTo };
 })();
 if (typeof module !== 'undefined') module.exports = Core;
 // ==CORE-END==
@@ -1337,7 +1503,7 @@ function resetZoom(draw) {
 // ---------- rendering ----------
 function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function isDark() { const t = document.documentElement.dataset.theme; return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; }
-function renderAll() { renderLegend(); renderKpis(); drawChart(); drawHeat(); renderTables(); }
+function renderAll() { renderLegend(); renderKpis(); drawChart(); drawHeat(); renderTables(); recomputeCap(); }
 
 function renderLegend() {
   const lim = limitVal();
@@ -1386,7 +1552,7 @@ function niceCountStep(max, n) {
 }
 
 // 静的な描画は裏の canvas に一度だけ描き、ホバー・ドラッグ時は重ね描き（drawOverlay）だけ更新する
-function drawChart() { renderBase(); drawOverlay(); renderPinned(); }
+function drawChart() { renderBase(); drawOverlay(); renderPinned(); drawCap(); }
 function renderBase() {
   const cv = $('cv'), wrap = $('wrap');
   const base = st.base || (st.base = document.createElement('canvas')), ctx = base.getContext('2d');
@@ -1752,6 +1918,145 @@ function renderTables() {
   }));
 }
 
+// ---------- capacity（Java 移行の容量見積り） ----------
+const fmtGB = mb => (mb / 1024).toFixed(mb >= 102400 ? 0 : 1);
+function capOpts() {
+  const f = (id, d, lo) => { const v = parseFloat($(id).value); return isFinite(v) && v >= (lo == null ? 0 : lo) ? v : d; };
+  return { heap: f('cHeap', 512, 1), nonheap: f('cNon', 256), cpu: f('cCpu', 0.5), bootCpu: f('cBoot', 1.5), bootSec: f('cBootSec', 15),
+    factor: f('cFactor', 1, 0.01), osGB: f('cOs', 8), margin: f('cMargin', 30), util: Math.min(100, f('cUtil', 70, 1)), cpuWindow: f('cWin', 300), limit: limitVal() };
+}
+function recomputeCap() {
+  if (!st.jobs || !st.S) return;
+  const P = Core.parseProfile($('prof').value);
+  st.profRules = P.rules; st.profErrors = P.errors; st.capO = capOpts();
+  st.cap = Core.capacity({ jobs: st.jobs, sel: st.sel }, P.rules, st.capO);
+  renderCap(); drawCap();
+}
+function renderCap() {
+  const K = st.cap, o = st.capO, J = st.jobs;
+  if (!K) return;
+  const used = new Map(); K.inSel.forEach(i => { const r = K.prof[i].rule; used.set(r, (used.get(r) || 0) + 1); });
+  const unused = st.profRules.filter((r, k) => !used.has(k));
+  $('profSummary').textContent = st.profRules.length ? `ルール ${st.profRules.length} 行・既定値のまま ${used.get(-1) || 0} 本` + (unused.length ? `・一致なし ${unused.length} 行` : '') : '未入力（全ジョブ既定値）';
+  $('profMsg').innerHTML = (st.profErrors.length ? `<span class="err">読めない行：${st.profErrors.map(e => `${e.line}行目（${esc(e.reason)}）`).join('、')}</span>　` : '') + (unused.length ? `一致するジョブがない行：${unused.map(r => esc(r.pat)).join('、')}` : '');
+  const m = 1 + o.margin / 100;
+  const skuM = Core.roundUpTo(K.memRecGB, Core.SKU_GB), skuC = Core.roundUpTo(K.coresRec, Core.SKU_CORES);
+  const cards = [
+    [true, 'メモリ見積り', `${K.memRecGB.toFixed(1)} GB`, `${skuM} GB 構成が目安。OS・常駐 ${o.osGB} GB ＋ JVM ピーク ${fmtGB(K.memPeak)} GB × ${m.toFixed(2)}`],
+    [false, 'JVM メモリのピーク', `${fmtGB(K.memPeak)} GB`, isFinite(K.memAt) ? `${fmtDT(K.memAt, true)}、${K.atPeak.length} 本が同時に確保` : '—'],
+    [true, 'CPU 見積り', `${K.coresRec} コア`, `${skuC} コア構成が目安。持続ピーク ${K.cpuSus.toFixed(1)} コア ÷ 目標 ${o.util}%`],
+    [false, o.cpuWindow > 0 ? `CPU の持続ピーク（${o.cpuWindow % 60 === 0 ? o.cpuWindow / 60 + '分' : fmtDur(o.cpuWindow)}平均）` : 'CPU のピーク', `${K.cpuSus.toFixed(1)} コア`, isFinite(K.cpuSusAt) ? `${fmtDT(K.cpuSusAt)} から。瞬間最大 ${K.cpuPeak.toFixed(1)} コア（${fmtDT(K.cpuAt)}）` : '—'],
+    [false, '梅：本数ピーク × 最大 JVM', `${K.umeGB.toFixed(1)} GB`, `${K.runPeak} 本 × ${fmtGB(K.maxMem)} GB ＋ OS・常駐（上限見積り）`],
+    [false, `上限 ${o.limit || 'N'} 本の保証値`, K.guaranteeGB == null ? '—' : `${K.guaranteeGB.toFixed(1)} GB`, K.guaranteeGB == null ? '多重度上限を入れると算出' : `大きい順に ${o.limit} 本の JVM ＋ OS・常駐。これを超えない`]
+  ];
+  $('capKpis').innerHTML = cards.map(([main, l, v, sub]) => `<div class="kpi${main ? ' main' : ''}"><div class="l">${esc(l)}</div><div class="v" title="${esc(v)}">${esc(v)}</div><div class="s">${esc(sub)}</div></div>`).join('');
+  const notes = [];
+  if (o.cpuWindow > 0 && K.cpuPeak > K.cpuSus * 1.2) notes.push(`瞬間最大 ${K.cpuPeak.toFixed(1)} コアは同時起動の山（${fmtDT(K.cpuAt)}）で、続くのは起動時間の間だけ。コアを足すより、起動をずらすか起動を速くする方が効く。`);
+  if (o.limit && K.runPeak > o.limit) notes.push(`Elapsed 倍率 ${o.factor} 倍では重なりが ${K.runPeak} 本になり、上限 ${o.limit} 本を超える。実際は JP1 が待たせるので、メモリは保証値で頭打ちになり、その分終了が遅れる。`);
+  $('capNote').textContent = notes.join(' ');
+  const top = K.atPeak.slice(0, 12), rest = K.atPeak.slice(12), restMB = rest.reduce((a, i) => a + K.prof[i].mem, 0);
+  $('atPeakCap').textContent = isFinite(K.memAt) ? `${fmtDT(K.memAt, true)} 時点の ${K.atPeak.length} 本、合計 ${fmtGB(K.memPeak)} GB（大きい順）` : '';
+  $('atPeakTbl').innerHTML = `<thead><tr><th>ジョブ名</th><th>クラス</th><th class="n">-Xmx</th><th class="n">非ヒープ</th><th class="n">合計 MB</th></tr></thead><tbody>${top.map(i => { const q = K.prof[i]; return `<tr class="click" data-i="${i}"><td>${esc(J[i].name)}</td><td>${esc(q.cls)}</td><td class="n">${q.heap}</td><td class="n">${q.nonheap}</td><td class="n">${q.mem}</td></tr>`; }).join('')}${rest.length ? `<tr><td class="hint" colspan="4">ほか ${rest.length} 本</td><td class="n">${restMB}</td></tr>` : ''}</tbody>`;
+  $('atPeakTbl').querySelectorAll('tr.click').forEach(tr => tr.addEventListener('click', () => { st.pinned = +tr.dataset.i; drawOverlay(); renderPinned(); $('wrap').scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
+  const by = new Map();
+  K.inSel.forEach(i => { const q = K.prof[i]; const x = by.get(q.cls) || { n: 0, lo: Infinity, hi: 0, pn: 0, pmb: 0 }; x.n++; x.lo = Math.min(x.lo, q.mem); x.hi = Math.max(x.hi, q.mem); by.set(q.cls, x); });
+  K.atPeak.forEach(i => { const x = by.get(K.prof[i].cls); x.pn++; x.pmb += K.prof[i].mem; });
+  const cls = Array.from(by).sort((a, b) => b[1].pmb - a[1].pmb || b[1].n - a[1].n);
+  $('clsTbl').innerHTML = `<thead><tr><th>クラス</th><th class="n">本数</th><th class="n">1 本の JVM（MB）</th><th class="n">ピーク時の本数</th><th class="n">ピーク時の合計</th></tr></thead><tbody>${cls.map(([c, x]) => `<tr><td>${esc(c)}</td><td class="n">${x.n}</td><td class="n">${x.lo === x.hi ? x.lo : `${x.lo}〜${x.hi}`}</td><td class="n">${x.pn}</td><td class="n">${fmtGB(x.pmb)} GB</td></tr>`).join('')}</tbody>`;
+}
+function drawCap() {
+  const K = st.cap;
+  if (!K || !st.layout) return;
+  const cv = $('cc'), wrap = $('cwrap');
+  const base = st.capBase || (st.capBase = document.createElement('canvas')), ctx = base.getContext('2d');
+  const W = Math.max(320, wrap.clientWidth), narrow = W < 560, o = st.capO, CS = K.C;
+  const C = { text: css('--text'), text2: css('--text-2'), tick: css('--tick'), grid: css('--grid'), axis: css('--axis'), other: css('--other'), long: css('--long'), wait: css('--wait'), band: css('--band'), surface: css('--surface'), sel: css('--sel') };
+  const font = getComputedStyle(document.body).fontFamily;
+  const L = 52, R = 14, T1 = 26, H1 = narrow ? 120 : 150, B1 = T1 + H1, T2 = B1 + 64, H2 = narrow ? 110 : 130, B2 = T2 + H2, H = B2 + 36;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = base.width = Math.round(W * dpr); cv.height = base.height = Math.round(H * dpr); cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = C.surface; ctx.fillRect(0, 0, W, H); ctx.font = `12px ${font}`;
+  const [v0, v1] = st.view, PW = W - L - R, xs = t => L + (t - v0) / (v1 - v0) * PW;
+  st.capLayout = { L, R, W, H, T1, B1, T2, B2, xs, PW, dpr, C };
+  const title = (t, y) => { ctx.fillStyle = C.text; ctx.font = `600 13px ${font}`; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.fillText(t, L, y); ctx.font = `12px ${font}`; };
+  const hline = (y, color, label) => { y = Math.round(y) + 0.5; ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(W - R, y); ctx.stroke(); if (label != null) { ctx.fillStyle = C.tick; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(label, L - 8, y); } };
+  const dashed = (y, color, label) => { y = Math.round(y) + 0.5; ctx.setLineDash([5, 4]); ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(W - R, y); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = C.text2; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'; ctx.fillText(label, W - R, y - 3); };
+  const { step, ticks } = timeTicks(v0, v1, PW);
+  const xAxis = bot => {
+    ctx.strokeStyle = C.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(L, Math.round(bot) + 0.5); ctx.lineTo(W - R, Math.round(bot) + 0.5); ctx.stroke();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top'; let lastDay = null;
+    ticks.forEach((t, i) => { const x = xs(t); ctx.fillStyle = C.tick; if (step >= 86400) { ctx.fillText(fmtMD(t), x, bot + 6); return; } ctx.fillText(fmtHM(t), x, bot + 6); const day = Math.floor(t / DAY); if (i === 0 || day !== lastDay) { ctx.fillStyle = C.text2; ctx.fillText(fmtDay(t), x, bot + 21); } lastDay = day; });
+  };
+  const steps = (key, y) => { const pts = []; Core.forSegments(CS, v0, v1, (a, b, k) => { const v = k < 0 ? 0 : CS[key][k]; pts.push([xs(a), y(v)], [xs(b), y(v)]); }); return pts; };
+  const plot = (pts, bot, color) => {
+    if (!pts.length) return;
+    ctx.save(); ctx.beginPath(); ctx.rect(L, bot - 400, PW, 400); ctx.clip();
+    ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.lineTo(pts[pts.length - 1][0], bot); ctx.lineTo(pts[0][0], bot); ctx.closePath();
+    ctx.globalAlpha = 0.22; ctx.fillStyle = color; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.stroke(); ctx.restore();
+  };
+  const mark = (x, y, label) => {
+    if (x < L || x > W - R) return;
+    ctx.fillStyle = C.text; ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = C.surface; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.font = `600 12px ${font}`; const tw = ctx.measureText(label).width; const right = x + 8 + tw < W - R;
+    ctx.textAlign = right ? 'left' : 'right'; ctx.textBaseline = 'bottom'; ctx.fillStyle = C.text; ctx.fillText(label, right ? x + 8 : x - 8, y - 4); ctx.font = `12px ${font}`;
+  };
+  // memory
+  const mrg = 1 + o.margin / 100;
+  title(narrow ? 'JVM メモリ合計（GB）' : 'JVM メモリ合計（GB）— 動いている JVM の -Xmx ＋ 非ヒープを足し上げ', T1 - 10);
+  let ym = K.memPeak * mrg / 1024;
+  Core.forSegments(CS, v0, v1, (a, b, k) => { if (k >= 0) ym = Math.max(ym, CS.mem[k] / 1024); });
+  const sm = niceCountStep(Math.max(ym, 1), narrow ? 4 : 5); ym = Math.ceil(ym / sm) * sm + sm;
+  const y1 = v => B1 - v / ym * H1;
+  for (let v = 0; v <= ym; v += sm) hline(y1(v), v === 0 ? C.axis : C.grid, v);
+  plot(steps('mem', v => y1(v / 1024)), B1, C.other);
+  dashed(y1(K.memPeak * mrg / 1024), C.text2, `余裕 ${o.margin}% 込み ${(K.memPeak * mrg / 1024).toFixed(1)} GB`);
+  if (isFinite(K.memAt)) mark(xs(K.memAt), y1(K.memPeak / 1024), `ピーク ${fmtGB(K.memPeak)} GB（${fmtHM(K.memAt)}）`);
+  xAxis(B1);
+  // cpu
+  title(narrow ? 'CPU 使用コア' : `CPU 使用コア — 起動直後は起動時 CPU、その後は定常 CPU`, T2 - 10);
+  let yc = Math.max(K.coresRec, 1);
+  Core.forSegments(CS, v0, v1, (a, b, k) => { if (k >= 0) yc = Math.max(yc, CS.cpu[k]); });
+  const sc = niceCountStep(yc, narrow ? 4 : 5); yc = Math.ceil(yc / sc) * sc + sc;
+  const y2 = v => B2 - v / yc * H2;
+  for (let v = 0; v <= yc; v += sc) hline(y2(v), v === 0 ? C.axis : C.grid, v);
+  if (o.cpuWindow > 0 && isFinite(K.cpuSusAt)) {
+    const xa = Math.max(L, xs(K.cpuSusAt)), xb = Math.min(W - R, xs(K.cpuSusAt + o.cpuWindow));
+    if (xb > xa) { ctx.fillStyle = C.band; ctx.fillRect(xa, T2, xb - xa, H2); ctx.strokeStyle = C.long; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(xa, Math.round(y2(K.cpuSus)) + 0.5); ctx.lineTo(xb, Math.round(y2(K.cpuSus)) + 0.5); ctx.stroke(); }
+  }
+  plot(steps('cpu', y2), B2, C.other);
+  dashed(y2(K.coresRec), C.text2, `見積り ${K.coresRec} コア（持続ピーク ÷ ${o.util}%）`);
+  if (isFinite(K.cpuSusAt)) mark(xs(K.cpuSusAt + (o.cpuWindow > 0 ? o.cpuWindow / 2 : 0)), y2(K.cpuSus), `持続ピーク ${K.cpuSus.toFixed(1)} コア`);
+  xAxis(B2);
+  drawCapOverlay();
+}
+function drawCapOverlay() {
+  const Lo = st.capLayout; if (!Lo || !st.capBase) return;
+  const cv = $('cc'), ctx = cv.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(st.capBase, 0, 0); ctx.setTransform(Lo.dpr, 0, 0, Lo.dpr, 0, 0);
+  if (st.capHover != null) { ctx.strokeStyle = Lo.C.text2; ctx.globalAlpha = 0.6; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(Math.round(st.capHover) + 0.5, Lo.T1); ctx.lineTo(Math.round(st.capHover) + 0.5, Lo.B2); ctx.stroke(); ctx.globalAlpha = 1; }
+}
+function setupCap() {
+  const cv = $('cc'), tip = $('ctip');
+  cv.addEventListener('pointermove', e => {
+    const Lo = st.capLayout, K = st.cap; if (!Lo || !K) return;
+    const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    if (x < Lo.L || x > Lo.W - Lo.R) { st.capHover = null; tip.style.display = 'none'; schedule(drawCapOverlay); return; }
+    const t = st.view[0] + (x - Lo.L) / Lo.PW * (st.view[1] - st.view[0]);
+    const mem = Core.valueAt(K.C, t, 'mem'), cpu = Core.valueAt(K.C, t, 'cpu'), run = Core.valueAt(K.C, t, 'run');
+    st.capHover = x; schedule(drawCapOverlay);
+    tip.innerHTML = `<b>${fmtDT(t, true)}</b><br>JVM メモリ ${fmtGB(mem)} GB・CPU ${cpu.toFixed(1)} コア・実行中 ${run} 本`;
+    tip.style.display = 'block'; const tw = tip.offsetWidth;
+    tip.style.left = Math.max(0, Math.min(x + 14, Lo.W - tw - 2)) + 'px'; tip.style.top = (y + 16) + 'px';
+  });
+  cv.addEventListener('pointerleave', () => { st.capHover = null; tip.style.display = 'none'; schedule(drawCapOverlay); });
+  ['cHeap', 'cNon', 'cCpu', 'cBoot', 'cBootSec', 'cFactor', 'cOs', 'cMargin', 'cUtil', 'cWin'].forEach(id => $(id).addEventListener('input', recomputeCap));
+  let pt = 0; $('prof').addEventListener('input', () => { clearTimeout(pt); pt = setTimeout(recomputeCap, 300); });
+  $('profSample').onclick = () => { $('prof').value = $('sample-profile').textContent.trim(); recomputeCap(); };
+  $('profLoad').onclick = () => $('profFile').click();
+  $('profFile').onchange = e => { const f = e.target.files[0]; if (!f) return; const rd = new FileReader(); rd.onload = () => { $('prof').value = Core.decodeBytes(new Uint8Array(rd.result), 'auto').text; $('profBox').open = true; recomputeCap(); }; rd.readAsArrayBuffer(f); e.target.value = ''; };
+}
+
 // ---------- export ----------
 function stamp() { const d = new Date(); return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`; }
 function download(name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
@@ -1774,6 +2079,12 @@ function setupExports() {
     list.forEach(p => rows.push([fmtFull(p.s), fmtFull(p.e), +(p.e - p.s).toFixed(3), p.max, fmtFull(p.maxAt), thr]));
     download(`jp1-peaks_${stamp()}.csv`, csv(rows));
   };
+  $('expCap').onclick = () => {
+    const K = st.cap; if (!K) return;
+    const rows = [['開始', '終了', '秒', '実行中', 'JVMメモリMB', 'CPUコア']];
+    Core.forSegments(K.C, st.view[0], st.view[1], (a, b, k) => rows.push([fmtFull(a), fmtFull(b), +(b - a).toFixed(3), k < 0 ? 0 : K.C.run[k], k < 0 ? 0 : +K.C.mem[k].toFixed(3), k < 0 ? 0 : +K.C.cpu[k].toFixed(3)]));
+    download(`jp1-capacity_${stamp()}.csv`, csv(rows));
+  };
 }
 
 // ---------- wiring ----------
@@ -1786,7 +2097,7 @@ function setup() {
   ['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
   ['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); if (ev === 'dragleave' && e.relatedTarget) return; drop.classList.remove('over'); }));
   document.addEventListener('drop', e => { const f = e.dataTransfer && e.dataTransfer.files[0]; readFile(f); });
-  const sample = (id, name, lim) => () => { $('limit').value = lim; loadBytes(new TextEncoder().encode($(id).textContent.trim()), name); };
+  const sample = (id, name, lim) => () => { $('limit').value = lim; $('prof').value = $('sample-profile').textContent.trim(); loadBytes(new TextEncoder().encode($(id).textContent.trim()), name); };
   $('s1').onclick = sample('sample-1day', 'サンプル：1晩・100ジョブ（多重度上限 20 で実行）', 20);
   $('s5').onclick = sample('sample-5days', 'サンプル：5晩・500ジョブ（多重度上限 20 で実行）', 20);
   $('enc').onchange = () => decodeAndParse(false);
@@ -1799,7 +2110,7 @@ function setup() {
   $('gantt').onchange = drawChart;
   let ft = 0; $('filter').addEventListener('input', () => { clearTimeout(ft); ft = setTimeout(() => { st.pinned = -1; refreshDays(true); recompute(true); }, 250); });
   $('resetZoom').onclick = () => resetZoom();
-  setupChartEvents(); setupHeatEvents(); setupExports();
+  setupChartEvents(); setupHeatEvents(); setupExports(); setupCap();
   let rt = 0; new ResizeObserver(() => { clearTimeout(rt); rt = setTimeout(() => { if (st.S) { drawChart(); drawHeat(); } }, 60); }).observe($('wrap'));
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (st.S) { drawChart(); drawHeat(); } });
   const q = new URLSearchParams(location.search);

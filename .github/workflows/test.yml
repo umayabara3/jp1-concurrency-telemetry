@@ -17,5 +17,6 @@ jobs:
       - run: python tools/embed_samples.py --check
       - name: CLI smoke test
         run: |
-          python tools/jp1_concurrency.py samples/sample_5days.csv --limit 20 --day 2026-11-02 --out out
-          test -s out/report.md && test -s out/jobs.csv
+          python tools/jp1_concurrency.py samples/sample_5days.csv --limit 20 --day 2026-11-02 --profile samples/profile_sample.csv --out out
+          test -s out/report.md && test -s out/jobs.csv && test -s out/capacity.csv
+          grep -q "Java 移行の容量見積り" out/report.md

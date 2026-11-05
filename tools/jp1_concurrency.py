@@ -7,6 +7,7 @@ JP1 の後続ジョブとして毎晩実行すれば、AI もブラウザも使�
     python tools/jp1_concurrency.py 実行履歴.csv --limit 20 --day 2026-11-04 --out report
     python tools/jp1_concurrency.py 実行履歴.csv --map "start=開始日時,end=終了日時,name=ジョブ名"
     python tools/jp1_concurrency.py 実行履歴.csv --png      # matplotlib があれば PNG も出す
+    python tools/jp1_concurrency.py 実行履歴.csv --limit 20 --profile 資源表.csv   # Java 移行の容量見積り
 
 出力（--out 既定は ./jp1-report-<入力ファイル名>）:
     report.md     要約・ピーク区間・長時間ジョブ・業務日×時刻の最大多重度
@@ -14,6 +15,7 @@ JP1 の後続ジョブとして毎晩実行すれば、AI もブラウザも使�
     jobs.csv      ジョブ別（長時間判定・開始直前の多重度・スロット・枠待ちの疑い）
     peaks.csv     ピーク区間
     hourly.csv    業務日×時刻の最大多重度
+    capacity.csv  容量見積りの時系列（JVM メモリ MB・CPU コア）。--sizing / --profile のとき
 """
 from __future__ import annotations
 
@@ -597,6 +599,229 @@ def hourly_matrix(S: Series, days: list[dict]) -> list[list[dict]]:
     return out
 
 
+# ---------------------------------------------------------------- 容量見積り（Java 移行：1 ジョブ＝1 JVM）
+
+
+@dataclass
+class CapOptions:
+    heap: float = 512        # 既定の -Xmx（MB）
+    nonheap: float = 256     # 既定の非ヒープ（MB）
+    cpu: float = 0.5         # 定常 CPU（コア）
+    boot_cpu: float = 1.5    # 起動時 CPU（コア）
+    boot_sec: float = 15     # 起動時間（秒）
+    factor: float = 1.0      # Elapsed 倍率（Java/COBOL）
+    os_gb: float = 8         # OS・常駐プロセス（GB）
+    margin: float = 30       # メモリの余裕（%）
+    util: float = 70         # CPU 目標使用率（%）
+    cpu_window: float = 300  # CPU を平均する幅（秒）。0 で瞬間値
+
+
+SKU_GB = [16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048]
+SKU_CORES = [4, 8, 12, 16, 20, 24, 28, 32, 40, 48, 56, 64, 96, 128]
+
+
+def round_up_to(v: float, lst: list[int]) -> int:
+    for x in lst:
+        if x >= v - 1e-9:
+            return x
+    return math.ceil(v)
+
+
+def glob_re(p: str) -> re.Pattern:
+    out = []
+    for ch in str(p).strip():
+        out.append(".*" if ch == "*" else "." if ch == "?" else re.escape(ch))
+    return re.compile("".join(out), re.I)
+
+
+def _prof_num(v):
+    t = ("" if v is None else str(v)).strip()
+    if not t:
+        return None
+    if not re.fullmatch(r"[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?", t):
+        return math.nan
+    return float(t)
+
+
+@dataclass
+class Rule:
+    pat: str
+    cls: str
+    heap: float | None
+    nonheap: float | None
+    cpu: float | None
+    boot_cpu: float | None
+    boot_sec: float | None
+    rx: re.Pattern
+    line: int
+
+
+def parse_profile(text: str) -> tuple[list[Rule], list[tuple[int, str]]]:
+    """1 行 1 ルール：パターン,クラス,ヒープMB,非ヒープMB,定常CPU,起動CPU,起動秒（空欄＝既定値、# で始まる行は注記）。"""
+    rules: list[Rule] = []
+    errors: list[tuple[int, str]] = []
+    for i, raw in enumerate(re.split(r"\r?\n", text or "")):
+        line = raw.strip()
+        if not line or line[0] == "#":
+            continue
+        rows = split_rows(line, "\t" if "\t" in line else ",")
+        c = [x.strip() for x in (rows[0] if rows else [])]
+        c += [""] * (7 - len(c))
+        if re.fullmatch(r"(パターン|pattern)", c[0], re.I):
+            continue
+        if not c[0]:
+            errors.append((i + 1, "パターンが空"))
+            continue
+        v = [_prof_num(x) for x in c[2:7]]
+        if any(x is not None and (math.isnan(x) or x < 0) for x in v):
+            errors.append((i + 1, "数値を解釈できない"))
+            continue
+        rules.append(Rule(c[0], c[1], v[0], v[1], v[2], v[3], v[4], glob_re(c[0]), i + 1))
+    return rules, errors
+
+
+@dataclass
+class Prof:
+    rule: int
+    cls: str
+    heap: float
+    nonheap: float
+    mem: float
+    cpu: float
+    boot_cpu: float
+    boot_sec: float
+
+
+def resolve_profiles(jobs: list[Job], rules: list[Rule], d: CapOptions) -> list[Prof]:
+    out = []
+    for j in jobs:
+        full = (j.group.rstrip("/") + "/" if j.group else "") + j.name
+        ri = -1
+        for k, r in enumerate(rules):
+            if r.rx.fullmatch(full if "/" in r.pat else j.name):
+                ri = k
+                break
+        r = rules[ri] if ri >= 0 else None
+        pick = (lambda name, dv: dv if r is None or getattr(r, name) is None else getattr(r, name))
+        heap, nonheap = pick("heap", d.heap), pick("nonheap", d.nonheap)
+        out.append(Prof(ri, (r.cls or r.pat) if r else "既定値", heap, nonheap, heap + nonheap,
+                        pick("cpu", d.cpu), pick("boot_cpu", d.boot_cpu), pick("boot_sec", d.boot_sec)))
+    return out
+
+
+@dataclass
+class CapSeries:
+    t: list[float] = field(default_factory=list)
+    mem: list[float] = field(default_factory=list)
+    run: list[int] = field(default_factory=list)
+    cpu: list[float] = field(default_factory=list)
+    ends: list[float] = field(default_factory=list)
+
+
+def capacity_series(jobs: list[Job], prof: list[Prof], factor: float) -> CapSeries:
+    """メモリ：開始〜終了の間ずっと確保。CPU：開始から起動秒は起動 CPU、その後は定常 CPU。Elapsed は factor 倍（開始は据え置き）。"""
+    m: dict[float, list[float]] = {}
+
+    def add(t, a, b, c):
+        d = m.setdefault(t, [0, 0, 0])
+        d[0] += a
+        d[1] += b
+        d[2] += c
+
+    C = CapSeries()
+    for j, p in zip(jobs, prof):
+        e = j.s + (j.e - j.s) * factor
+        C.ends.append(e)
+        if not e > j.s:
+            continue
+        add(j.s, p.mem, 1, 0)
+        add(e, -p.mem, -1, 0)
+        boot = min(max(0, p.boot_sec), e - j.s)
+        if boot > 0:
+            add(j.s, 0, 0, p.boot_cpu)
+            add(j.s + boot, 0, 0, -p.boot_cpu)
+        if j.s + boot < e:
+            add(j.s + boot, 0, 0, p.cpu)
+            add(e, 0, 0, -p.cpu)
+    a = c = 0.0
+    r = 0
+    for t in sorted(m):
+        d = m[t]
+        a, r, c = a + d[0], r + int(d[1]), c + d[2]
+        C.t.append(t)
+        C.mem.append(a)
+        C.run.append(r)
+        C.cpu.append(c)
+    return C
+
+
+def window_peak(S, key: str, a: float, b: float, W: float) -> tuple[float, float]:
+    """[a, b) で幅 W 秒の移動平均が最大になる位置。W<=0 なら瞬間最大。"""
+    seg_s, seg_v, cum = [], [], []
+    acc = 0.0
+    vals = getattr(S, key)
+    for s0, s1, k in for_segments(S, a, b):
+        v = 0 if k < 0 else vals[k]
+        seg_s.append(s0)
+        seg_v.append(v)
+        cum.append(acc)
+        acc += v * (s1 - s0)
+    if not seg_s:
+        return 0.0, math.nan
+    if not W > 0:
+        peak, at = -math.inf, math.nan
+        for v, s0 in zip(seg_v, seg_s):
+            if v > peak:
+                peak, at = v, s0
+        return peak, at
+    if b - a <= W:
+        return acc / (b - a), a
+
+    def integ(x):
+        ix = max(0, bisect.bisect_right(seg_s, x) - 1)
+        return cum[ix] + seg_v[ix] * (x - seg_s[ix])
+
+    peak, at = -math.inf, math.nan
+    for s0 in seg_s:
+        for x0 in (s0, s0 - W):
+            x = min(max(x0, a), b - W)
+            v = (integ(x + W) - integ(x)) / W
+            if v > peak + 1e-12:
+                peak, at = v, x
+    return peak, at
+
+
+def capacity(jobs: list[Job], sel: tuple[float, float], rules: list[Rule], o: CapOptions, limit: int) -> dict:
+    prof = resolve_profiles(jobs, rules, o)
+    C = capacity_series(jobs, prof, o.factor)
+    in_sel = [i for i, j in enumerate(jobs) if C.ends[i] > sel[0] and j.s < sel[1]]
+    a, b = sel[0], sel[1]
+    for i in in_sel:
+        b = max(b, C.ends[i])
+    mem_peak, mem_at, cpu_peak, cpu_at, run_peak = 0.0, math.nan, 0.0, math.nan, 0
+    for s0, s1, k in for_segments(C, a, b):
+        if k < 0:
+            continue
+        if C.mem[k] > mem_peak:
+            mem_peak, mem_at = C.mem[k], s0
+        if C.cpu[k] > cpu_peak:
+            cpu_peak, cpu_at = C.cpu[k], s0
+        run_peak = max(run_peak, C.run[k])
+    mems = sorted((prof[i].mem for i in in_sel), reverse=True)
+    max_mem = mems[0] if mems else 0
+    guarantee = sum(mems[:limit]) if limit and limit > 0 else None
+    at_peak = sorted((i for i in in_sel if isfinite(mem_at) and jobs[i].s <= mem_at < C.ends[i]),
+                     key=lambda i: (-prof[i].mem, i)) if isfinite(mem_at) else []
+    k = 1 + o.margin / 100
+    sus, sus_at = window_peak(C, "cpu", a, b, o.cpu_window)
+    return dict(prof=prof, C=C, range=(a, b), in_sel=in_sel, mem_peak=mem_peak, mem_at=mem_at, cpu_peak=cpu_peak,
+                cpu_at=cpu_at, cpu_sus=sus, cpu_sus_at=sus_at, run_peak=run_peak, max_mem=max_mem, guarantee=guarantee,
+                at_peak=at_peak, mem_rec_gb=o.os_gb + mem_peak * k / 1024,
+                cores_rec=math.ceil(sus / (o.util / 100) - 1e-9),
+                ume_gb=o.os_gb + run_peak * max_mem * k / 1024,
+                guarantee_gb=None if guarantee is None else o.os_gb + guarantee * k / 1024, opt=o, limit=limit)
+
+
 # ---------------------------------------------------------------- 分析の一式
 
 
@@ -611,6 +836,8 @@ class Options:
     boundary: int = 12
     day: str = "all"
     filter: str = ""
+    cap: CapOptions | None = None   # 容量見積りをするとき指定
+    profile_text: str = ""          # ジョブ別・クラス別の資源表（CSV テキスト）
 
 
 def _filter_jobs(jobs: list[Job], expr: str) -> list[Job]:
@@ -662,10 +889,15 @@ def analyze(raw: bytes, opt: Options) -> dict:
     st = range_stats(S, sel[0], sel[1], opt.limit)
     peak_thr = opt.limit or max(1, math.ceil(st["peak"] * 0.8))
     peaks = peak_intervals(S, sel[0], sel[1], peak_thr, 60)
+    cap, prof_errors = None, []
+    if opt.cap is not None:
+        rules, prof_errors = parse_profile(opt.profile_text)
+        cap = capacity(jobs, sel, rules, opt.cap, opt.limit)
+        cap["rules"] = rules
     return dict(encoding=enc, parsed=p, mapping=mp, all_jobs=all_jobs, jobs=jobs, skipped=skipped, mismatch=mismatch,
                 days=days, sel=sel, long_thr=thr, long_flag=long_flag, S=S, lanes=lanes, lane_count=lane_count,
                 suspect=sus, start_conc=start_conc, stats=st, peak_thr=peak_thr, peaks=peaks,
-                hourly=hourly_matrix(S, days), opt=opt)
+                hourly=hourly_matrix(S, days), opt=opt, cap=cap, prof_errors=prof_errors)
 
 
 def summary_json(r: dict) -> dict:
@@ -681,7 +913,18 @@ def summary_json(r: dict) -> dict:
         series=[[S.t[k], S.run[k], S.long[k], S.wait[k]] for k in range(len(S.t))],
         days=[[d["start"], d["count"], d["first"], d["last"]] for d in r["days"]],
         hourly=[[c["peak"] for c in row] for row in r["hourly"]],
+        cap=None if r["cap"] is None else _cap_json(r["cap"]),
     )
+
+
+def _cap_json(K: dict) -> dict:
+    C: CapSeries = K["C"]
+    return dict(rules=[p.rule for p in K["prof"]], mem=[p.mem for p in K["prof"]], range=list(K["range"]),
+                mem_peak=K["mem_peak"], mem_at=K["mem_at"], cpu_peak=K["cpu_peak"], cpu_at=K["cpu_at"],
+                cpu_sus=K["cpu_sus"], cpu_sus_at=K["cpu_sus_at"], run_peak=K["run_peak"], max_mem=K["max_mem"],
+                guarantee=K["guarantee"], at_peak=K["at_peak"], mem_rec_gb=K["mem_rec_gb"], cores_rec=K["cores_rec"],
+                ume_gb=K["ume_gb"], guarantee_gb=K["guarantee_gb"],
+                series=[[C.t[k], C.mem[k], C.run[k], C.cpu[k]] for k in range(len(C.t))])
 
 
 # ---------------------------------------------------------------- 書き出し
@@ -796,6 +1039,15 @@ def write_outputs(r: dict, out: Path, src_name: str, png: bool) -> list[Path]:
     for d, row in zip(r["days"], r["hourly"]):
         L.append(f"| {_fmt_day(d['start'])} | " + " | ".join((f"**{c['peak']}**" if lim and c["peak"] >= lim else str(c["peak"])) for c in row) + " |")
     L += ["", "太字は多重度上限以上。定義は jp1-telemetry.html の「指標の定義と読み方」と同じ。", ""]
+    if r["cap"] is not None:
+        L += _cap_report(r, J)
+        K, C = r["cap"], r["cap"]["C"]
+        rows = [["開始", "終了", "秒", "実行中", "JVMメモリMB", "CPUコア"]]
+        for s0, s1, k in for_segments(C, K["range"][0], K["range"][1]):
+            rows.append([_dt(s0), _dt(s1), _num(s1 - s0), 0 if k < 0 else C.run[k], 0 if k < 0 else _num(C.mem[k]),
+                         0 if k < 0 else _num(C.cpu[k])])
+        _write_csv(out / "capacity.csv", rows)
+        files.append(out / "capacity.csv")
     (out / "report.md").write_text("\n".join(L), encoding="utf-8")
     files.insert(0, out / "report.md")
 
@@ -803,7 +1055,99 @@ def write_outputs(r: dict, out: Path, src_name: str, png: bool) -> list[Path]:
         p = _plot_png(r, out / "concurrency.png", src_name)
         if p:
             files.append(p)
+        if p and r["cap"] is not None:
+            q = _plot_cap_png(r, out / "capacity.png", src_name)
+            if q:
+                files.append(q)
     return files
+
+
+def _cap_report(r: dict, J: list[Job]) -> list[str]:
+    K, o, lim = r["cap"], r["cap"]["opt"], r["cap"]["limit"]
+    m = 1 + o.margin / 100
+    gb = lambda mb: f"{mb / 1024:.1f}"  # noqa: E731
+    win = (f"{o.cpu_window / 60:g}分平均" if o.cpu_window % 60 == 0 else f"{o.cpu_window:g}秒平均") if o.cpu_window > 0 else "瞬間値"
+    L = ["## Java 移行の容量見積り（1 ジョブ＝1 JVM）", "",
+         f"既定値：-Xmx {o.heap:g} MB・非ヒープ {o.nonheap:g} MB・定常 CPU {o.cpu:g} コア・起動時 CPU {o.boot_cpu:g} コア × {o.boot_sec:g} 秒・"
+         f"Elapsed {o.factor:g} 倍・OS・常駐 {o.os_gb:g} GB・余裕 {o.margin:g}%・CPU 目標使用率 {o.util:g}%・CPU は {win}。"
+         f"資源表 {len(K['rules'])} 行" + (f"（読めない行 {len(r['prof_errors'])}）" if r["prof_errors"] else "") + "。", "",
+         "| 項目 | 値 | 根拠 |", "|---|---|---|",
+         f"| **メモリ見積り** | **{K['mem_rec_gb']:.1f} GB**（{round_up_to(K['mem_rec_gb'], SKU_GB)} GB 構成が目安） | OS・常駐 {o.os_gb:g} GB ＋ JVM ピーク {gb(K['mem_peak'])} GB × {m:.2f} |",
+         f"| JVM メモリのピーク | {gb(K['mem_peak'])} GB | {_dt(K['mem_at']) if isfinite(K['mem_at']) else '—'}、{len(K['at_peak'])} 本 |",
+         f"| **CPU 見積り** | **{K['cores_rec']} コア**（{round_up_to(K['cores_rec'], SKU_CORES)} コア構成が目安） | 持続ピーク {K['cpu_sus']:.1f} コア ÷ {o.util:g}% |",
+         f"| CPU の持続ピーク（{win}） | {K['cpu_sus']:.1f} コア | {_dt(K['cpu_sus_at']) if isfinite(K['cpu_sus_at']) else '—'} から。瞬間最大 {K['cpu_peak']:.1f} コア（{_dt(K['cpu_at']) if isfinite(K['cpu_at']) else '—'}） |",
+         f"| 梅：本数ピーク × 最大 JVM | {K['ume_gb']:.1f} GB | {K['run_peak']} 本 × {gb(K['max_mem'])} GB ＋ OS・常駐（上限見積り） |",
+         f"| 上限 {lim or 'N'} 本の保証値 | " + ("—" if K["guarantee_gb"] is None else f"{K['guarantee_gb']:.1f} GB") + " | "
+         + ("--limit を指定すると算出" if K["guarantee_gb"] is None else f"大きい順に {lim} 本の JVM ＋ OS・常駐") + " |", ""]
+    if o.cpu_window > 0 and K["cpu_peak"] > K["cpu_sus"] * 1.2:
+        L.append(f"- 瞬間最大 {K['cpu_peak']:.1f} コアは同時起動の山。続くのは起動時間の間だけで、コアを足すより起動をずらすか起動を速くする方が効く")
+    if lim and K["run_peak"] > lim:
+        L.append(f"- Elapsed {o.factor:g} 倍では重なりが {K['run_peak']} 本になり上限 {lim} 本を超える。実際は JP1 が待たせるので、メモリは保証値で頭打ちになり、その分終了が遅れる")
+    L += ["", "### メモリのピーク時刻に動いている JVM（大きい順）", "", "| ジョブ名 | クラス | -Xmx MB | 非ヒープ MB | 合計 MB |", "|---|---|---:|---:|---:|"]
+    for i in K["at_peak"][:12]:
+        q = K["prof"][i]
+        L.append(f"| {J[i].name} | {q.cls} | {_num(q.heap)} | {_num(q.nonheap)} | {_num(q.mem)} |")
+    rest = K["at_peak"][12:]
+    if rest:
+        L.append(f"| ほか {len(rest)} 本 | | | | {_num(sum(K['prof'][i].mem for i in rest))} |")
+    by: dict[str, dict] = {}
+    for i in K["in_sel"]:
+        q = K["prof"][i]
+        x = by.setdefault(q.cls, dict(n=0, lo=math.inf, hi=0, pn=0, pmb=0))
+        x["n"] += 1
+        x["lo"], x["hi"] = min(x["lo"], q.mem), max(x["hi"], q.mem)
+    for i in K["at_peak"]:
+        x = by[K["prof"][i].cls]
+        x["pn"] += 1
+        x["pmb"] += K["prof"][i].mem
+    L += ["", "### クラス別の内訳", "", "| クラス | 本数 | 1 本の JVM（MB） | ピーク時の本数 | ピーク時の合計 |", "|---|---:|---:|---:|---:|"]
+    for c, x in sorted(by.items(), key=lambda kv: (-kv[1]["pmb"], -kv[1]["n"])):
+        rng = f"{_num(x['lo'])}" if x["lo"] == x["hi"] else f"{_num(x['lo'])}〜{_num(x['hi'])}"
+        L.append(f"| {c} | {x['n']} | {rng} | {x['pn']} | {gb(x['pmb'])} GB |")
+    return L + [""]
+
+
+def _plot_cap_png(r: dict, path: Path, title: str) -> Path | None:
+    try:
+        import datetime as _d
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.dates as mdates
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+    K, o = r["cap"], r["cap"]["opt"]
+    C = K["C"]
+    dn = lambda t: mdates.date2num(_d.datetime(1970, 1, 1) + _d.timedelta(seconds=t))  # noqa: E731
+    xs, mem, cpu = [], [], []
+    for s0, s1, k in for_segments(C, K["range"][0], K["range"][1]):
+        xs += [dn(s0), dn(s1)]
+        mem += [0 if k < 0 else C.mem[k] / 1024] * 2
+        cpu += [0 if k < 0 else C.cpu[k]] * 2
+    BLUE = "#2a78d6"
+    fig, ax = plt.subplots(2, 1, figsize=(12, 6.5), sharex=True)
+    ax[0].fill_between(xs, 0, mem, color=BLUE, alpha=0.22, lw=0)
+    ax[0].plot(xs, mem, color=BLUE, lw=1.2)
+    ax[0].axhline(K["mem_peak"] * (1 + o.margin / 100) / 1024, ls="--", color="#52514e", lw=1)
+    if isfinite(K["mem_at"]):
+        ax[0].plot(dn(K["mem_at"]), K["mem_peak"] / 1024, "o", color="#0b0b0b", ms=5)
+        ax[0].annotate(f"ピーク {K['mem_peak'] / 1024:.1f} GB", (dn(K["mem_at"]), K["mem_peak"] / 1024), xytext=(8, 6), textcoords="offset points")
+    ax[0].set_ylabel("JVM メモリ合計（GB）")
+    ax[1].fill_between(xs, 0, cpu, color=BLUE, alpha=0.22, lw=0)
+    ax[1].plot(xs, cpu, color=BLUE, lw=1.2)
+    ax[1].axhline(K["cores_rec"], ls="--", color="#52514e", lw=1)
+    if isfinite(K["cpu_sus_at"]) and o.cpu_window > 0:
+        ax[1].plot([dn(K["cpu_sus_at"]), dn(K["cpu_sus_at"] + o.cpu_window)], [K["cpu_sus"]] * 2, color="#e34948", lw=2.5)
+    ax[1].set_ylabel("CPU 使用コア")
+    ax[1].xaxis.set_major_formatter(mdates.DateFormatter("%H:%M\n%m/%d"))
+    for a in ax:
+        a.grid(axis="y", color="#e1e0d9", lw=0.8)
+        a.spines[["top", "right"]].set_visible(False)
+    fig.suptitle(f"容量見積り：{title}　メモリ {K['mem_rec_gb']:.1f} GB・CPU {K['cores_rec']} コア", x=0.01, ha="left")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
 
 
 def _plot_png(r: dict, path: Path, title: str) -> Path | None:
@@ -916,6 +1260,19 @@ def main(argv=None) -> int:
     ap.add_argument("--out", type=Path, help="出力フォルダ（既定 ./jp1-report-<入力名>）")
     ap.add_argument("--png", action="store_true", help="matplotlib があれば concurrency.png も出力")
     ap.add_argument("--json", action="store_true", help="突合用の要約 JSON を標準出力に出す（ファイルは書かない）")
+    g2 = ap.add_argument_group("容量見積り（Java 移行：1 ジョブ＝1 JVM）。--sizing か --profile で有効")
+    g2.add_argument("--sizing", action="store_true", help="容量見積りを出力する（report.md の節と capacity.csv）")
+    g2.add_argument("--profile", type=Path, help="ジョブ別・クラス別の資源表 CSV（samples/profile_sample.csv の書式）")
+    g2.add_argument("--heap", type=float, default=512, help="既定の -Xmx（MB）。既定 512")
+    g2.add_argument("--nonheap", type=float, default=256, help="既定の非ヒープ（MB）。既定 256")
+    g2.add_argument("--cpu", type=float, default=0.5, help="既定の定常 CPU（コア）。既定 0.5")
+    g2.add_argument("--boot-cpu", type=float, default=1.5, help="既定の起動時 CPU（コア）。既定 1.5")
+    g2.add_argument("--boot-sec", type=float, default=15, help="既定の起動時間（秒）。既定 15")
+    g2.add_argument("--elapsed-factor", type=float, default=1.0, help="Elapsed 倍率（Java/COBOL）。既定 1.0")
+    g2.add_argument("--os-gb", type=float, default=8, help="OS・常駐プロセス（GB）。既定 8")
+    g2.add_argument("--margin", type=float, default=30, help="メモリの余裕（%%）。既定 30")
+    g2.add_argument("--util", type=float, default=70, help="CPU 目標使用率（%%）。既定 70")
+    g2.add_argument("--cpu-window", type=float, default=300, help="CPU を平均する幅（秒）。0 で瞬間値。既定 300")
     a = ap.parse_args(argv)
 
     raw = a.log.read_bytes()
@@ -926,6 +1283,12 @@ def main(argv=None) -> int:
         opt.long_mode, opt.long_val = "pct", a.long_pct
     elif a.long_min is not None:
         opt.long_val = a.long_min
+    if a.sizing or a.profile:
+        opt.cap = CapOptions(heap=a.heap, nonheap=a.nonheap, cpu=a.cpu, boot_cpu=a.boot_cpu, boot_sec=a.boot_sec,
+                             factor=a.elapsed_factor, os_gb=a.os_gb, margin=a.margin, util=max(1, min(100, a.util)),
+                             cpu_window=a.cpu_window)
+        if a.profile:
+            opt.profile_text = decode_bytes(a.profile.read_bytes(), "auto")[0]
     if a.map:
         text, _ = decode_bytes(raw, opt.encoding)
         opt.mapping = _parse_map(a.map, parse_log(text, delim).header)
@@ -943,6 +1306,11 @@ def main(argv=None) -> int:
     st = r["stats"]
     print(f"読込 {len(r['all_jobs'])} 件（除外 {len(r['skipped'])}）・ピーク多重度 {st['peak']} 本・平均 {st['avg']:.1f} 本"
           + (f"・上限張り付き {fmt_dur(st['sat'])}" if opt.limit else ""))
+    if r["cap"] is not None:
+        K = r["cap"]
+        print(f"容量見積り：メモリ {K['mem_rec_gb']:.1f} GB（{round_up_to(K['mem_rec_gb'], SKU_GB)} GB 構成）・"
+              f"CPU {K['cores_rec']} コア（{round_up_to(K['cores_rec'], SKU_CORES)} コア構成）"
+              + (f"・資源表の読めない行 {len(r['prof_errors'])}" if r["prof_errors"] else ""))
     for f in files:
         print(f"  {f}")
     return 0

@@ -23,5 +23,17 @@ const out = {
   series: Array.from(S.t, (t, k) => [t, S.run[k], S.long[k], S.wait[k]]),
   days: A.days.map(d => [d.start, d.count, d.first, d.last]),
   hourly: C.hourlyMatrix(S, A.days, o.boundary).map(row => row.map(c => c.peak)),
+  cap: null,
 };
+if (o.cap) {
+  const c = Object.assign({ heap: 512, nonheap: 256, cpu: 0.5, boot_cpu: 1.5, boot_sec: 15, factor: 1, os_gb: 8, margin: 30, util: 70, cpu_window: 300, profile: null }, o.cap);
+  const rules = c.profile ? C.parseProfile(C.decodeBytes(new Uint8Array(fs.readFileSync(c.profile)), 'auto').text).rules : [];
+  const K = C.capacity(A, rules, { heap: c.heap, nonheap: c.nonheap, cpu: c.cpu, bootCpu: c.boot_cpu, bootSec: c.boot_sec, factor: c.factor, osGB: c.os_gb, margin: c.margin, util: c.util, cpuWindow: c.cpu_window, limit: o.limit });
+  out.cap = {
+    rules: K.prof.map(q => q.rule), mem: K.prof.map(q => q.mem), range: K.range,
+    mem_peak: K.memPeak, mem_at: fin(K.memAt), cpu_peak: K.cpuPeak, cpu_at: fin(K.cpuAt), cpu_sus: K.cpuSus, cpu_sus_at: fin(K.cpuSusAt),
+    run_peak: K.runPeak, max_mem: K.maxMem, guarantee: K.guarantee, at_peak: K.atPeak, mem_rec_gb: K.memRecGB, cores_rec: K.coresRec,
+    ume_gb: K.umeGB, guarantee_gb: K.guaranteeGB, series: Array.from(K.C.t, (t, k) => [t, K.C.mem[k], K.C.run[k], K.C.cpu[k]]),
+  };
+}
 process.stdout.write(JSON.stringify(out));

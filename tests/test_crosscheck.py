@@ -23,10 +23,16 @@ OPTIONS = [
     dict(limit=15, long_mode="min", long_val=10, boundary=18, filter="取込, 集計"),
     dict(limit=20, day="2026-11-02"),
     dict(limit=20, filter="!日付変更後"),
+    dict(limit=20, cap=dict(profile="samples/profile_sample.csv")),
+    dict(limit=0, cap=dict(heap=1024, nonheap=300, cpu=0.7, boot_cpu=2, boot_sec=30, factor=1.3, os_gb=6, margin=20, util=60, cpu_window=0)),
+    dict(limit=15, day="2026-11-02", cap=dict(profile="samples/profile_sample.csv", factor=0.8, cpu_window=900)),
 ]
 
 
 def js_summary(path: str, opt: dict) -> dict:
+    opt = json.loads(json.dumps(opt))
+    if opt.get("cap", {}).get("profile"):
+        opt["cap"]["profile"] = str(ROOT / opt["cap"]["profile"])
     out = subprocess.run(["node", str(ROOT / "tests" / "summary.js"), str(ROOT / path), json.dumps(opt)],
                          check=True, capture_output=True, text=True, encoding="utf-8")
     return json.loads(out.stdout)
@@ -35,6 +41,11 @@ def js_summary(path: str, opt: dict) -> dict:
 def py_summary(path: str, opt: dict) -> dict:
     o = jc.Options(limit=opt.get("limit", 0), long_mode=opt.get("long_mode", "min"), long_val=opt.get("long_val", 20),
                    boundary=opt.get("boundary", 12), day=opt.get("day", "all"), filter=opt.get("filter", ""))
+    if "cap" in opt:
+        c = dict(opt["cap"])
+        prof = c.pop("profile", None)
+        o.cap = jc.CapOptions(**c)
+        o.profile_text = (ROOT / prof).read_text(encoding="utf-8") if prof else ""
     s = jc.summary_json(jc.analyze((ROOT / path).read_bytes(), o))
     return json.loads(json.dumps(s, default=str).replace("NaN", "null").replace("Infinity", "null"))
 
@@ -63,8 +74,9 @@ def test_crosscheck() -> None:
             j, p = js_summary(f, opt), py_summary(f, opt)
             same(j, p, f"{f} {opt}")
             n += 1
-            print(f"ok {f} {opt}  peak={p['stats']['peak']} segments={len(p['series'])} suspects={len(p['suspects'])}")
-    assert n >= 20
+            cap = f" mem={p['cap']['mem_peak']:.0f}MB cores={p['cap']['cores_rec']}" if p.get("cap") else ""
+            print(f"ok {f} {opt}  peak={p['stats']['peak']} segments={len(p['series'])} suspects={len(p['suspects'])}{cap}")
+    assert n >= 30
     print(f"\n{n} combinations matched")
 
 

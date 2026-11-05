@@ -140,4 +140,52 @@ test('analyze：絞り込み・業務日・待ちの実測', () => {
   deepEq(B.jobs.map(j => j.name), ['取込A']);
 });
 
+test('資源表：書式・照合の優先順・空欄は既定値', () => {
+  const P = C.parseProfile('# 注記\nパターン,クラス,ヒープMB,非ヒープMB,定常CPU,起動CPU,起動秒\n大型*,L,4096,384,1.0,,\n/日次/取込/*,M,1024,,,,\n*,S,256,,,,\nbad,X,abc\n,Y,1');
+  deepEq(P.rules.map(r => r.pat), ['大型*', '/日次/取込/*', '*']);
+  deepEq(P.errors.map(e => [e.line, e.reason]), [[6, '数値を解釈できない'], [7, 'パターンが空']]);
+  const J = [job(0, 10, { name: '大型マスタ', group: '/日次/取込' }), job(0, 10, { name: '受信01', group: '/日次/取込/' }), job(0, 10, { name: 'その他', group: '' })];
+  const d = { heap: 512, nonheap: 256, cpu: 0.5, bootCpu: 1.5, bootSec: 15 };
+  const R = C.resolveProfiles(J, P.rules, d);
+  deepEq(R.map(q => [q.rule, q.cls, q.mem, q.cpu, q.bootCpu]), [[0, 'L', 4480, 1, 1.5], [1, 'M', 1280, 0.5, 1.5], [2, 'S', 512, 0.5, 1.5]]);
+  deepEq(C.resolveProfiles(J, [], d).map(q => [q.rule, q.cls, q.mem]), [[-1, '既定値', 768], [-1, '既定値', 768], [-1, '既定値', 768]]);
+});
+
+test('容量の時系列：メモリは全期間、CPU は起動時→定常、Elapsed 倍率', () => {
+  const J = [job(0, 100), job(50, 60)];
+  const P = [{ mem: 1000, cpu: 0.5, bootCpu: 2, bootSec: 20 }, { mem: 300, cpu: 1, bootCpu: 1, bootSec: 30 }];
+  const S = C.capacitySeries(J, P, 1);
+  const at = (t, k) => C.valueAt(S, t, k);
+  deepEq([at(10, 'mem'), at(10, 'cpu'), at(30, 'cpu'), at(55, 'mem'), at(55, 'cpu'), at(65, 'cpu'), at(100, 'mem')], [1000, 2, 0.5, 1300, 1.5, 0.5, 0]);
+  const S2 = C.capacitySeries(J, P, 1.5);
+  deepEq([C.valueAt(S2, 120, 'mem'), C.valueAt(S2, 64, 'mem'), C.valueAt(S2, 150, 'mem')], [1000, 1300, 0]);
+});
+
+test('CPU の持続ピーク（移動平均）と瞬間ピーク', () => {
+  const S = { t: [0, 10, 20, 100, 400], cpu: [10, 2, 4, 0, 0] };
+  deepEq(C.windowPeak(S, 'cpu', 0, 400, 0), { peak: 10, at: 0 });
+  const w = C.windowPeak(S, 'cpu', 0, 400, 100);
+  assert.ok(Math.abs(w.peak - (10 * 10 + 2 * 10 + 4 * 80) / 100) < 1e-9 && w.at === 0);
+  const w2 = C.windowPeak(S, 'cpu', 0, 400, 50);
+  assert.ok(Math.abs(w2.peak - (10 * 10 + 2 * 10 + 4 * 30) / 50) < 1e-9);
+});
+
+test('容量見積り：ピーク・保証値・梅・推奨値', () => {
+  const J = [job(0, 600, { name: 'L1' }), job(0, 600, { name: 'S1' }), job(300, 900, { name: 'S2' }), job(700, 800, { name: 'S3' })];
+  const A = { jobs: J, sel: [0, 900] };
+  const rules = C.parseProfile('L*,L,4096,384,1,1,0\nS*,S,512,256,0.5,0.5,0').rules;
+  const K = C.capacity(A, rules, { heap: 512, nonheap: 256, cpu: 0.5, bootCpu: 0.5, bootSec: 0, factor: 1, osGB: 8, margin: 25, util: 50, cpuWindow: 0, limit: 2 });
+  assert.strictEqual(K.memPeak, 4480 + 768 + 768);
+  assert.strictEqual(K.memAt, 300);
+  assert.strictEqual(K.runPeak, 3);
+  assert.strictEqual(K.cpuSus, 2);
+  assert.strictEqual(K.coresRec, 4);
+  assert.strictEqual(K.guarantee, 4480 + 768);
+  assert.ok(Math.abs(K.memRecGB - (8 + 6016 * 1.25 / 1024)) < 1e-9);
+  assert.ok(Math.abs(K.umeGB - (8 + 3 * 4480 * 1.25 / 1024)) < 1e-9);
+  deepEq(K.atPeak, [0, 1, 2]);
+  assert.strictEqual(C.roundUpTo(17.4, C.SKU_GB), 24);
+  assert.strictEqual(C.roundUpTo(16, C.SKU_CORES), 16);
+});
+
 console.log(`\n${n} tests passed`);
