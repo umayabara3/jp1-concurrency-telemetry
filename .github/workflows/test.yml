@@ -1,0 +1,21 @@
+name: test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: node tests/test_core.js
+      - run: python tests/test_crosscheck.py
+      - run: python tests/test_ground_truth.py
+      - run: python tools/embed_samples.py --check
+      - name: CLI smoke test
+        run: |
+          python tools/jp1_concurrency.py samples/sample_5days.csv --limit 20 --day 2026-11-02 --out out
+          test -s out/report.md && test -s out/jobs.csv
